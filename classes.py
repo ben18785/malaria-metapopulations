@@ -3,6 +3,8 @@ import random as random
 import scipy as sp
 from scipy import integrate as integrate
 import math as math
+from matplotlib import pylab as plt
+import time as time
 
 
 class patch:
@@ -57,6 +59,9 @@ class patch:
     def getParams(self):
         return self.vParams
 
+    def getPopulation(self):
+        return self.mosquitoGroup.getPopulation()
+
     def runODE(self,cTime,cNumSteps):
         vTime = np.linspace(0,cTime,cNumSteps)
         yInit = self.mosquitoGroup.getPopulation()
@@ -68,7 +73,7 @@ class patch:
         newGroup = mosquitoGroup(Y[-1,0],Y[-1,1],Y[-1,2],Y[-1,3],Y[-1,4],Y[-1,5],Y[-1,6],Y[-1,7],Y[-1,8],Y[-1,9])
         self.mosquitoGroup.removeMosquitoes(self.mosquitoGroup) # Clears the group
         self.immigrate(newGroup)
-        
+
 
     # Once a migration to another patch is confirmed, this function removes the outgoing group numbers from the existing mosquitoes
     def emigrate(self,outgoingMosquitoGroup):
@@ -78,19 +83,23 @@ class patch:
     def immigrate(self,incomingMosquitoGroup):
         self.mosquitoGroup.addMosquitoes(incomingMosquitoGroup)
 
+    def migration(self,outgoingMosquitoGroup,otherPatch):
+        self.emigrate(outgoingMosquitoGroup)
+        otherPatch.immigrate(outgoingMosquitoGroup)
+
     # Gets the rate for a particular migration from this patch to another, which is a function of both distance and mosquito number
-    def getRate(self,anotherPatch):
+    def getRate(self,anotherPatch,cRateParameter):
         cdistance = getDistance(self.getLocation(),anotherPatch.getLocation())
-        cRate = 0.0001*self.mosquitoGroup.getTotalAdultPopulation()/(cdistance**2)
+        cRate = cRateParameter*self.mosquitoGroup.getTotalAdultPopulation()/(cdistance**2)
         return cRate
 
-    def getAllRates(self,aArea):
+    def getAllRates(self,aArea,cRateParameter):
         vRates = []
         for patches in aArea.getPatches():
             cdistance = getDistance(self.getLocation(),patches.getLocation())
             if cdistance > 0:
 
-                vRates.append([self,patches,self.getRate(patches)])
+                vRates.append([self,patches,self.getRate(patches,cRateParameter)])
         return vRates
 
 
@@ -105,17 +114,30 @@ class location:
         return np.array([self.x,self.y])
 
 class mosquitoGroup:
-    def __init__(self,aJx,aJY0,aJY1,aMY0,aMY1,aU,aHY0,aHY1,aOY0,aOY1):
-        self.Jx = aJx
-        self.JY0 = aJY0
-        self.JY1 = aJY1
-        self.MY0 = aMY0
-        self.MY1 = aMY1
-        self.U = aU
-        self.HY0 = aHY0
-        self.HY1 = aHY1
-        self.OY0 = aOY0
-        self.OY1 = aOY1
+    def __init__(self,aJx,aJY0=None,aJY1=None,aMY0=None,aMY1=None,aU=None,aHY0=None,aHY1=None,aOY0=None,aOY1=None):
+        if aJY0 is None: # For case of supplying arguments as a vector (therefore one input)
+            self.Jx = aJx[0]
+            self.JY0 = aJx[1]
+            self.JY1 = aJx[2]
+            self.MY0 = aJx[3]
+            self.MY1 = aJx[4]
+            self.U = aJx[5]
+            self.HY0 = aJx[6]
+            self.HY1 = aJx[7]
+            self.OY0 = aJx[8]
+            self.OY1 = aJx[9]
+        else:
+            self.Jx = aJx
+            self.JY0 = aJY0
+            self.JY1 = aJY1
+            self.MY0 = aMY0
+            self.MY1 = aMY1
+            self.U = aU
+            self.HY0 = aHY0
+            self.HY1 = aHY1
+            self.OY0 = aOY0
+            self.OY1 = aOY1
+
 
     def getPopulation(self):
         return np.array([self.Jx,self.JY0,self.JY1,self.MY0,self.MY1,self.U,self.HY0,self.HY1,self.OY0,self.OY1])
@@ -125,6 +147,7 @@ class mosquitoGroup:
 
     def getTotalAdultPopulation(self):
         return np.sum(np.array([self.MY0,self.MY1,self.U,self.HY0,self.HY1,self.OY0,self.OY1]))
+
 
     def addMosquitoes(self,anotherMosquitoGroup):
         self.Jx += anotherMosquitoGroup.Jx
@@ -151,12 +174,15 @@ class mosquitoGroup:
         self.OY1 -= anotherMosquitoGroup.OY1
 
 class area:
-    def __init__(self,anumPatches,aSize):
+    def __init__(self,anumPatches,aSize,aInitialPopulation,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma):
         self.vPatches = []
         for i in range(0,anumPatches):
-            self.vPatches.append(patch(randomLocation(aSize),10,10,mosquitoGroup(1000,1000,1000,1000,1000,1000,1000,1000,1000,1000)))
+            cNumBreedRand = random.gammavariate(aBreedGamma,bBreedGamma)
+            cNumFeedRand = random.gammavariate(aFeedGamma,bFeedGamma)
+            self.vPatches.append(patch(randomLocation(aSize),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
 
         self.numPatches = anumPatches
+        self.Size = aSize
 
     def getPatches(self):
         return self.vPatches
@@ -167,7 +193,14 @@ class area:
         for patches in self.vPatches:
             vLocations.append(patches.getLocation())
 
-        return vLocations
+        return np.array(vLocations)
+
+    def getPatchPopulation(self):
+        vPatchPopulation = []
+        for patches in self.vPatches:
+            vPatchPopulation.append(patches.getTotalPopulation())
+
+        return np.array(vPatchPopulation)
 
     def getTotalPopulation(self):
         cCount = 0
@@ -176,10 +209,10 @@ class area:
 
         return cCount
 
-    def getAllRates(self):
+    def getAllRates(self,cRateParameter):
         mRates = []
         for patches in self.vPatches:
-            mRates.append(patches.getAllRates(self))
+            mRates.append(patches.getAllRates(self,cRateParameter))
         return mRates
 
     def getTimeIncrement(self):
@@ -189,8 +222,8 @@ class area:
         return cTime
 
 
-    def getTimeIncrementAndSelectEvent(self):
-        mRates = self.getAllRates()
+    def getTimeIncrementAndSelectEvent(self,cRateParameter):
+        mRates = self.getAllRates(cRateParameter)
         vSum = sumPatchRates(mRates)
         cSum = sum(vSum)
         cRand = random.random()
@@ -205,11 +238,15 @@ class area:
         cOtherPatchNumber = pickPatch(vRatesWithinPatch,cSumWithinPatch,self.numPatches-1)
         return [cTime,cPatchNumber,cOtherPatchNumber]
 
+    def getSize(self):
+        return self.Size
 
-
-    def evolveODE(self):
+    def evolveODE(self,cTime,cNumSteps):
         for patches in self.vPatches:
-            pass
+            patches.runODEAndUpdateGroup(cTime,cNumSteps)
+
+
+
 
 def randomLocation(cSize):
     ax = cSize*random.random()
@@ -295,3 +332,48 @@ def pickPatch(vSum,cSum,cNumPatches):
         if random.random()<vSum[cRandIndex]/cSum:
             test = 1
             return cRandIndex
+
+# Calculates rates, then gives time till next migration, then selects event, implements the migration and evolves
+# the ODEs for that time period
+def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter):
+    cTimeCounter = 0
+    cSteps = 0
+    vTotalPopulation = []
+    vTimeEvents = []
+    vTimeEvents.append(0)
+    vLocations = aArea.getPatchesLocation()
+
+    # Initial period of running to get individual cases to near equilibrium before starting migration
+    cInitialTime = 100
+    aArea.evolveODE(cInitialTime,cNumSteps)
+    vTotalPopulation.append(aArea.getTotalPopulation())
+
+
+    f, axarr = plt.subplots(2)
+    while cTimeCounter < cTimeTotal:
+
+        [cTimeIncrement,cPatchNumber,cOtherPatchNumber] = aArea.getTimeIncrementAndSelectEvent(cRateParameter)
+        # print(cPatchNumber,cOtherPatchNumber,sep=',')
+        aArea.evolveODE(cTimeIncrement,cNumSteps)
+        aGroup = mosquitoGroup(cMigrantProportion*aArea.getPatches()[cPatchNumber].getPopulation())
+        aArea.getPatches()[cPatchNumber].migration(aGroup,aArea.getPatches()[cOtherPatchNumber])
+        cTimeCounter += cTimeIncrement
+        cSteps += 1
+        vPatchPopulations = aArea.getPatchPopulation()
+
+        axarr[0].scatter(vLocations[:,0],vLocations[:,1],s=0.03*vPatchPopulations,c='b')
+        axarr[0].set_xlim([0,aArea.getSize()])
+        axarr[0].hold(False)
+        plt.draw()
+
+        vTotalPopulation.append(aArea.getTotalPopulation())
+        vTimeEvents.append(cTimeCounter)
+        print(cTimeCounter)
+
+        axarr[1].plot(np.array(vTimeEvents),np.array(vTotalPopulation),c='b')
+        axarr[1].hold(False)
+        axarr[1].set_xlim([0,cTimeTotal])
+        axarr[1].set_ylim([0,max(np.array(vTotalPopulation))+1e6])
+
+        f.show()
+
