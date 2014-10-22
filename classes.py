@@ -5,6 +5,7 @@ from scipy import integrate as integrate
 import math as math
 from matplotlib import pylab as plt
 import time as time
+import matplotlib as mpl
 
 
 class patch:
@@ -98,9 +99,12 @@ class patch:
         for patches in aArea.getPatches():
             cdistance = getDistance(self.getLocation(),patches.getLocation())
             if cdistance > 0:
-
                 vRates.append([self,patches,self.getRate(patches,cRateParameter)])
         return vRates
+
+    def setPopulationToZero(self):
+        self.mosquitoGroup.setGroupSizeToZero()
+
 
 
 
@@ -173,13 +177,29 @@ class mosquitoGroup:
         self.OY0 -= anotherMosquitoGroup.OY0
         self.OY1 -= anotherMosquitoGroup.OY1
 
+    def setGroupSizeToZero(self):
+        self.Jx = 0
+        self.JY0 = 0
+        self.JY1 = 0
+        self.MY0 = 0
+        self.MY1 = 0
+        self.U = 0
+        self.HY0 = 0
+        self.HY1 = 0
+        self.OY0 = 0
+        self.OY1 = 0
+
+
 class area:
-    def __init__(self,anumPatches,aSize,aInitialPopulation,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma):
+    def __init__(self,anumPatches,aSize,aInitialPopulation,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,vCovarianceParams):
         self.vPatches = []
         for i in range(0,anumPatches):
             cNumBreedRand = random.gammavariate(aBreedGamma,bBreedGamma)
             cNumFeedRand = random.gammavariate(aFeedGamma,bFeedGamma)
-            self.vPatches.append(patch(randomLocation(aSize),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
+            if vCovarianceParams[0] == 0:
+                self.vPatches.append(patch(randomLocation(aSize),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
+            else:
+                self.vPatches.append(patch(randomCovarianceLocation(aSize,vCovarianceParams),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
 
         self.numPatches = anumPatches
         self.Size = aSize
@@ -187,6 +207,8 @@ class area:
     def getPatches(self):
         return self.vPatches
 
+    def getNumPatches(self):
+        return self.numPatches
 
     def getPatchesLocation(self):
         vLocations = []
@@ -234,18 +256,58 @@ class area:
 
         # Now select the destination amongst the other patches
         vRatesWithinPatch = sumWithinPatch(mRates,cPatchNumber,self.numPatches-1)
+        # print(vRatesWithinPatch)
+        # print(mRates[cPatchNumber])
         cSumWithinPatch = vSum[cPatchNumber]
         cOtherPatchNumber = pickPatch(vRatesWithinPatch,cSumWithinPatch,self.numPatches-1)
-        return [cTime,cPatchNumber,cOtherPatchNumber]
+        aOtherPatch = mRates[cPatchNumber][cOtherPatchNumber][1]
+        # print(cOtherPatchNumber)
+        # print(aOtherPatch)
+        # time.sleep(3)
+        return [cTime,cPatchNumber,aOtherPatch]
 
     def getSize(self):
         return self.Size
 
-    def evolveODE(self,cTime,cNumSteps):
+    def getHegIndicator(self):
+        vHegIndicator = np.zeros(self.numPatches)
+        k = 0
         for patches in self.vPatches:
-            patches.runODEAndUpdateGroup(cTime,cNumSteps)
+            vPopulationTemp = patches.getPopulation()
+            if vPopulationTemp[2] > 0:
+                vHegIndicator[k] = 1
+            k += 1
+        return vHegIndicator
 
+    def evolveODE(self,cTime,cNumSteps,cPopulationZeroThreshold):
+        for patches in self.vPatches:
+            if patches.getTotalPopulation() > cPopulationZeroThreshold:
+                patches.runODEAndUpdateGroup(cTime,cNumSteps)
+            else:
+                patches.setPopulationToZero()
 
+# A construct that is used for creating spatially-correlated landscapes
+class Disturbance:
+    def __init__(self,aLocation):
+        self.location = aLocation
+        self.vPatches = []
+
+    def addPatch(self,vCovarianceParams,anumBreedSites,anumFeedSites,aMosquitoGroup):
+        aX = self.location[0]
+        aY = self.location[1]
+
+        # Generate x and y of patch
+        cKernelSigma = vCovarianceParams[2]
+        aPatchX = aX + random.normalvariate(0,cKernelSigma)
+        aPatchY = aY + random.normalvariate(0,cKernelSigma)
+        aLocation = location(aPatchX,aPatchY)
+
+        # Create patch
+        aPatch = patch(aLocation,anumBreedSites,anumFeedSites,aMosquitoGroup)
+        return aPatch
+
+    def createPatches(self,vCovarianceParams):
+        pass
 
 
 def randomLocation(cSize):
@@ -322,6 +384,7 @@ def sumWithinPatch(mRates,cPatchNumber,cNumOtherPatches):
     mRates1 = mRates[cPatchNumber]
     for i in range(0,cNumOtherPatches):
         vSum.append(mRates1[i][2])
+
     return vSum
 
 
@@ -329,13 +392,15 @@ def pickPatch(vSum,cSum,cNumPatches):
     test = 0
     while test == 0:
         cRandIndex = random.randint(0,cNumPatches-1)
+
         if random.random()<vSum[cRandIndex]/cSum:
+            # print(vSum[cRandIndex]/cSum)
             test = 1
             return cRandIndex
 
 # Calculates rates, then gives time till next migration, then selects event, implements the migration and evolves
 # the ODEs for that time period
-def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter):
+def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cInitialTime,cTimeHegIn,cPoplationThresholdIndicator,cPopulationZeroThreshold):
     cTimeCounter = 0
     cSteps = 0
     vTotalPopulation = []
@@ -344,27 +409,45 @@ def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter):
     vLocations = aArea.getPatchesLocation()
 
     # Initial period of running to get individual cases to near equilibrium before starting migration
-    cInitialTime = 100
-    aArea.evolveODE(cInitialTime,cNumSteps)
+    if cPoplationThresholdIndicator == 0:
+        aArea.evolveODE(cInitialTime,cNumSteps,0)
+    else:
+        aArea.evolveODE(cInitialTime,cNumSteps,cPopulationZeroThreshold)
     vTotalPopulation.append(aArea.getTotalPopulation())
 
+    HegSwitch = 0
 
     f, axarr = plt.subplots(2)
     while cTimeCounter < cTimeTotal:
 
-        [cTimeIncrement,cPatchNumber,cOtherPatchNumber] = aArea.getTimeIncrementAndSelectEvent(cRateParameter)
-        # print(cPatchNumber,cOtherPatchNumber,sep=',')
-        aArea.evolveODE(cTimeIncrement,cNumSteps)
+        # Put Heg into a random patch if it is sufficiently big
+        if cTimeCounter > cTimeHegIn and HegSwitch == 0:
+            while HegSwitch == 0:
+                aHegGroup = mosquitoGroup(0,0,1000,0,0,0,0,0,0,0)
+                cRandEntry = random.randint(0,aArea.getNumPatches()-1)
+                if aArea.getPatches()[cRandEntry].getTotalPopulation() > 0:
+                    HegSwitch = 1
+                    aArea.getPatches()[cRandEntry].immigrate(aHegGroup)
+                    print(aArea.getPatches()[cRandEntry].getLocation())
+
+
+        [cTimeIncrement,cPatchNumber,aOtherPatch] = aArea.getTimeIncrementAndSelectEvent(cRateParameter)
+        if cPoplationThresholdIndicator == 0:
+            aArea.evolveODE(cTimeIncrement,cNumSteps,0)
+        else:
+            aArea.evolveODE(cTimeIncrement,cNumSteps,cPopulationZeroThreshold)
         aGroup = mosquitoGroup(cMigrantProportion*aArea.getPatches()[cPatchNumber].getPopulation())
-        aArea.getPatches()[cPatchNumber].migration(aGroup,aArea.getPatches()[cOtherPatchNumber])
+        aArea.getPatches()[cPatchNumber].migration(aGroup,aOtherPatch)
         cTimeCounter += cTimeIncrement
         cSteps += 1
         vPatchPopulations = aArea.getPatchPopulation()
 
-        axarr[0].scatter(vLocations[:,0],vLocations[:,1],s=0.03*vPatchPopulations,c='b')
+        axarr[0].scatter(vLocations[:,0],vLocations[:,1],s=0.03*vPatchPopulations,c=aArea.getHegIndicator(),vmin=0, vmax=1)
         axarr[0].set_xlim([0,aArea.getSize()])
         axarr[0].hold(False)
         plt.draw()
+        # print(aArea.getHegIndicator())
+
 
         vTotalPopulation.append(aArea.getTotalPopulation())
         vTimeEvents.append(cTimeCounter)
@@ -373,7 +456,11 @@ def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter):
         axarr[1].plot(np.array(vTimeEvents),np.array(vTotalPopulation),c='b')
         axarr[1].hold(False)
         axarr[1].set_xlim([0,cTimeTotal])
-        axarr[1].set_ylim([0,max(np.array(vTotalPopulation))+1e6])
+        axarr[1].set_ylim([0,max(np.array(vTotalPopulation))+0.1e6])
 
         f.show()
 
+
+def randomCovarianceLocation(aSize,vCovarianceParams):
+    for i in range(0,nNumDisturbances):
+        pass
