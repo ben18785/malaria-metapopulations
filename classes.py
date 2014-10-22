@@ -63,6 +63,9 @@ class patch:
     def getPopulation(self):
         return self.mosquitoGroup.getPopulation()
 
+    def getHegJuveniles(self):
+        return self.getPopulation()[2]
+
     def runODE(self,cTime,cNumSteps):
         vTime = np.linspace(0,cTime,cNumSteps)
         yInit = self.mosquitoGroup.getPopulation()
@@ -74,7 +77,6 @@ class patch:
         newGroup = mosquitoGroup(Y[-1,0],Y[-1,1],Y[-1,2],Y[-1,3],Y[-1,4],Y[-1,5],Y[-1,6],Y[-1,7],Y[-1,8],Y[-1,9])
         self.mosquitoGroup.removeMosquitoes(self.mosquitoGroup) # Clears the group
         self.immigrate(newGroup)
-
 
     # Once a migration to another patch is confirmed, this function removes the outgoing group numbers from the existing mosquitoes
     def emigrate(self,outgoingMosquitoGroup):
@@ -193,15 +195,16 @@ class mosquitoGroup:
 class area:
     def __init__(self,anumPatches,aSize,aInitialPopulation,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,vCovarianceParams):
         self.vPatches = []
-        for i in range(0,anumPatches):
-            cNumBreedRand = random.gammavariate(aBreedGamma,bBreedGamma)
-            cNumFeedRand = random.gammavariate(aFeedGamma,bFeedGamma)
-            if vCovarianceParams[0] == 0:
+        if vCovarianceParams[0] == 0:
+            for i in range(0,anumPatches):
+                cNumBreedRand = random.gammavariate(aBreedGamma,bBreedGamma)
+                cNumFeedRand = random.gammavariate(aFeedGamma,bFeedGamma)
                 self.vPatches.append(patch(randomLocation(aSize),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
-            else:
-                self.vPatches.append(patch(randomCovarianceLocation(aSize,vCovarianceParams),cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0)))
+            self.numPatches = anumPatches
+        else:
+            self.vPatches = randomCovariancePatches(aSize,vCovarianceParams,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,aInitialPopulation)
+            self.numPatches = len(self.vPatches)
 
-        self.numPatches = anumPatches
         self.Size = aSize
 
     def getPatches(self):
@@ -256,14 +259,12 @@ class area:
 
         # Now select the destination amongst the other patches
         vRatesWithinPatch = sumWithinPatch(mRates,cPatchNumber,self.numPatches-1)
-        # print(vRatesWithinPatch)
-        # print(mRates[cPatchNumber])
+
         cSumWithinPatch = vSum[cPatchNumber]
         cOtherPatchNumber = pickPatch(vRatesWithinPatch,cSumWithinPatch,self.numPatches-1)
         aOtherPatch = mRates[cPatchNumber][cOtherPatchNumber][1]
-        # print(cOtherPatchNumber)
-        # print(aOtherPatch)
-        # time.sleep(3)
+        if self.getPatches()[cPatchNumber].getHegJuveniles() > 0:
+            print("Heg migration")
         return [cTime,cPatchNumber,aOtherPatch]
 
     def getSize(self):
@@ -292,22 +293,28 @@ class Disturbance:
         self.location = aLocation
         self.vPatches = []
 
-    def addPatch(self,vCovarianceParams,anumBreedSites,anumFeedSites,aMosquitoGroup):
-        aX = self.location[0]
-        aY = self.location[1]
+    def addPatch(self,vCovarianceParams,anumBreedSites,anumFeedSites,aMosquitoGroup,aSize):
+        aX = self.location.getLocation()[0]
+        aY = self.location.getLocation()[1]
 
         # Generate x and y of patch
         cKernelSigma = vCovarianceParams[2]
-        aPatchX = aX + random.normalvariate(0,cKernelSigma)
-        aPatchY = aY + random.normalvariate(0,cKernelSigma)
+        aPatchX = aSize - ((aX + random.normalvariate(0,cKernelSigma))% aSize)
+        aPatchY = aSize - ((aY + random.normalvariate(0,cKernelSigma))% aSize)
         aLocation = location(aPatchX,aPatchY)
 
         # Create patch
-        aPatch = patch(aLocation,anumBreedSites,anumFeedSites,aMosquitoGroup)
-        return aPatch
+        return patch(aLocation,anumBreedSites,anumFeedSites,aMosquitoGroup)
 
-    def createPatches(self,vCovarianceParams):
-        pass
+    def createPatches(self,vCovarianceParams,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,aInitialPopulation,aSize):
+        cNumPatches = np.random.poisson(vCovarianceParams[3])
+        vPatches = []
+        for i in range(0,cNumPatches):
+            cNumBreedRand = random.gammavariate(aBreedGamma,bBreedGamma)
+            cNumFeedRand = random.gammavariate(aFeedGamma,bFeedGamma)
+            vPatches.append(self.addPatch(vCovarianceParams,cNumBreedRand,cNumFeedRand,mosquitoGroup(aInitialPopulation,aInitialPopulation,0,0,0,0,0,0,0,0),aSize))
+        return vPatches
+
 
 
 def randomLocation(cSize):
@@ -407,12 +414,12 @@ def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cI
     vTimeEvents = []
     vTimeEvents.append(0)
     vLocations = aArea.getPatchesLocation()
-
     # Initial period of running to get individual cases to near equilibrium before starting migration
     if cPoplationThresholdIndicator == 0:
         aArea.evolveODE(cInitialTime,cNumSteps,0)
     else:
         aArea.evolveODE(cInitialTime,cNumSteps,cPopulationZeroThreshold)
+
     vTotalPopulation.append(aArea.getTotalPopulation())
 
     HegSwitch = 0
@@ -461,6 +468,11 @@ def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cI
         f.show()
 
 
-def randomCovarianceLocation(aSize,vCovarianceParams):
-    for i in range(0,nNumDisturbances):
-        pass
+def randomCovariancePatches(aSize,vCovarianceParams,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,aInitialPopulation):
+    vPatches = []
+    cNumDisturbances = vCovarianceParams[1]
+    for i in range(0,cNumDisturbances):
+        aDisturbance = Disturbance(randomLocation(aSize))
+        vPatches.append(aDisturbance.createPatches(vCovarianceParams,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,aInitialPopulation,aSize))
+    vPatches = [item for sublist in vPatches for item in sublist]
+    return vPatches

@@ -18,10 +18,11 @@ cInitialTime = 100 # Time to run ODEs before the migration starts
 cTimeHegIn = 10 # Time to put the Heg in after the migration starts
 
 # Landscape covariance terms
-cCovarianceIndicator = 0 # Whether there is covariance among the housing locations
+cCovarianceIndicator = 1 # Whether there is covariance among the housing locations
 cNumDisturbances = 10
-cKernelSigma = 5
-vCovarianceParams = [cCovarianceIndicator,cNumDisturbances,cKernelSigma]
+cKernelSigma = 100
+cMeanNumPatchesPoisson = 5
+vCovarianceParams = [cCovarianceIndicator,cNumDisturbances,cKernelSigma,cMeanNumPatchesPoisson]
 
 
 
