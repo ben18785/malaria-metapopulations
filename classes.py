@@ -14,6 +14,7 @@ class patch:
         self.numBreedSites = anumBreedSites
         self.numFeedSites = anumFeedSites
         self.mosquitoGroup = aMosquitoGroup
+        self.vDistances = []
 
         cSO = 0.15
         cSH = 0.5
@@ -63,8 +64,18 @@ class patch:
     def getPopulation(self):
         return self.mosquitoGroup.getPopulation()
 
+    def getHegPopulation(self):
+        vTemp = self.getPopulation()
+        return vTemp[2] + vTemp[4] + vTemp[7] + vTemp[9]
+
     def getHegJuveniles(self):
         return self.getPopulation()[2]
+
+    def getVDistance(self):
+        return self.vDistances
+
+    def setDistances(self,cDistance):
+        self.vDistances.append(cDistance)
 
     def runODE(self,cTime,cNumSteps):
         vTime = np.linspace(0,cTime,cNumSteps)
@@ -91,17 +102,20 @@ class patch:
         otherPatch.immigrate(outgoingMosquitoGroup)
 
     # Gets the rate for a particular migration from this patch to another, which is a function of both distance and mosquito number
-    def getRate(self,anotherPatch,cRateParameter):
-        cdistance = getDistance(self.getLocation(),anotherPatch.getLocation())
-        cRate = cRateParameter*self.mosquitoGroup.getTotalAdultPopulation()/(cdistance**2)
+    def getRate(self,cPopulation,cDistance,cRateParameter):
+        cRate = cRateParameter*cPopulation/(cDistance**2)
         return cRate
 
     def getAllRates(self,aArea,cRateParameter):
         vRates = []
+        k = 0
+        vDistance = self.getVDistance()
+        cPopulation = self.mosquitoGroup.getTotalAdultPopulation()
         for patches in aArea.getPatches():
-            cdistance = getDistance(self.getLocation(),patches.getLocation())
-            if cdistance > 0:
-                vRates.append([self,patches,self.getRate(patches,cRateParameter)])
+            cDistance = vDistance[k]
+            k += 1
+            if cDistance > 0:
+                vRates.append([self,patches,cRateParameter*cPopulation/(cDistance**2)])
         return vRates
 
     def setPopulationToZero(self):
@@ -234,6 +248,12 @@ class area:
 
         return cCount
 
+    def getHegPopulation(self):
+        cSum = 0
+        for patches in self.vPatches:
+            cSum += patches.getHegPopulation()
+        return cSum
+
     def getAllRates(self,cRateParameter):
         mRates = []
         for patches in self.vPatches:
@@ -246,6 +266,8 @@ class area:
         cTime = (1/cSum)*math.log(1/cRand)
         return cTime
 
+    def addPatch(self,aPatch):
+        self.vPatches.append(aPatch)
 
     def getTimeIncrementAndSelectEvent(self,cRateParameter):
         mRates = self.getAllRates(cRateParameter)
@@ -280,6 +302,19 @@ class area:
             k += 1
         return vHegIndicator
 
+    def getNumBreedSites(self):
+        vNumBreedSites = []
+        for patches in self.vPatches:
+            vNumBreedSites.append(patches.getNumBreedSites())
+        return vNumBreedSites
+
+    def getNumFeedSites(self):
+        vNumFeedSites = []
+        for patches in self.vPatches:
+            vNumFeedSites.append(patches.getNumFeedSites())
+        return vNumFeedSites
+
+
     def evolveODE(self,cTime,cNumSteps,cPopulationZeroThreshold):
         for patches in self.vPatches:
             if patches.getTotalPopulation() > cPopulationZeroThreshold:
@@ -299,8 +334,21 @@ class Disturbance:
 
         # Generate x and y of patch
         cKernelSigma = vCovarianceParams[2]
-        aPatchX = aSize - ((aX + random.normalvariate(0,cKernelSigma))% aSize)
-        aPatchY = aSize - ((aY + random.normalvariate(0,cKernelSigma))% aSize)
+        aXIncrement = random.normalvariate(0,cKernelSigma)
+        aYIncrement = random.normalvariate(0,cKernelSigma)
+        aPatchX = aX + aXIncrement
+        aPatchY = aY + aYIncrement
+
+        if aPatchX > aSize:
+            aPatchX = aX - aXIncrement
+        elif aPatchX < 0:
+            aPatchX = aX + aXIncrement
+        if aPatchY > aSize:
+            aPatchY = aY - aYIncrement
+        elif aPatchY < 0:
+            aPatchY = aY + aYIncrement
+
+
         aLocation = location(aPatchX,aPatchY)
 
         # Create patch
@@ -405,67 +453,6 @@ def pickPatch(vSum,cSum,cNumPatches):
             test = 1
             return cRandIndex
 
-# Calculates rates, then gives time till next migration, then selects event, implements the migration and evolves
-# the ODEs for that time period
-def evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cInitialTime,cTimeHegIn,cPoplationThresholdIndicator,cPopulationZeroThreshold):
-    cTimeCounter = 0
-    cSteps = 0
-    vTotalPopulation = []
-    vTimeEvents = []
-    vTimeEvents.append(0)
-    vLocations = aArea.getPatchesLocation()
-    # Initial period of running to get individual cases to near equilibrium before starting migration
-    if cPoplationThresholdIndicator == 0:
-        aArea.evolveODE(cInitialTime,cNumSteps,0)
-    else:
-        aArea.evolveODE(cInitialTime,cNumSteps,cPopulationZeroThreshold)
-
-    vTotalPopulation.append(aArea.getTotalPopulation())
-
-    HegSwitch = 0
-
-    f, axarr = plt.subplots(2)
-    while cTimeCounter < cTimeTotal:
-
-        # Put Heg into a random patch if it is sufficiently big
-        if cTimeCounter > cTimeHegIn and HegSwitch == 0:
-            while HegSwitch == 0:
-                aHegGroup = mosquitoGroup(0,0,1000,0,0,0,0,0,0,0)
-                cRandEntry = random.randint(0,aArea.getNumPatches()-1)
-                if aArea.getPatches()[cRandEntry].getTotalPopulation() > 0:
-                    HegSwitch = 1
-                    aArea.getPatches()[cRandEntry].immigrate(aHegGroup)
-                    print(aArea.getPatches()[cRandEntry].getLocation())
-
-
-        [cTimeIncrement,cPatchNumber,aOtherPatch] = aArea.getTimeIncrementAndSelectEvent(cRateParameter)
-        if cPoplationThresholdIndicator == 0:
-            aArea.evolveODE(cTimeIncrement,cNumSteps,0)
-        else:
-            aArea.evolveODE(cTimeIncrement,cNumSteps,cPopulationZeroThreshold)
-        aGroup = mosquitoGroup(cMigrantProportion*aArea.getPatches()[cPatchNumber].getPopulation())
-        aArea.getPatches()[cPatchNumber].migration(aGroup,aOtherPatch)
-        cTimeCounter += cTimeIncrement
-        cSteps += 1
-        vPatchPopulations = aArea.getPatchPopulation()
-
-        axarr[0].scatter(vLocations[:,0],vLocations[:,1],s=0.03*vPatchPopulations,c=aArea.getHegIndicator(),vmin=0, vmax=1)
-        axarr[0].set_xlim([0,aArea.getSize()])
-        axarr[0].hold(False)
-        plt.draw()
-        # print(aArea.getHegIndicator())
-
-
-        vTotalPopulation.append(aArea.getTotalPopulation())
-        vTimeEvents.append(cTimeCounter)
-        print(cTimeCounter)
-
-        axarr[1].plot(np.array(vTimeEvents),np.array(vTotalPopulation),c='b')
-        axarr[1].hold(False)
-        axarr[1].set_xlim([0,cTimeTotal])
-        axarr[1].set_ylim([0,max(np.array(vTotalPopulation))+0.1e6])
-
-        f.show()
 
 
 def randomCovariancePatches(aSize,vCovarianceParams,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,aInitialPopulation):

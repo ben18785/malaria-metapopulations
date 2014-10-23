@@ -2,10 +2,11 @@ from metapopulationFunctionsAndClasses import classes
 from matplotlib import pylab
 import numpy as np
 import random as random
+from metapopulationFunctionsAndClasses import functions
 
 cTimeTotal = 3000
 cNumSteps = 100
-cNumPatches = 50
+cNumPatches = 200
 cSize = 1000
 cInitialPopulation = 1000
 cMigrantProportion = 0.1
@@ -19,20 +20,22 @@ cTimeHegIn = 10 # Time to put the Heg in after the migration starts
 
 # Landscape covariance terms
 cCovarianceIndicator = 1 # Whether there is covariance among the housing locations
-cNumDisturbances = 10
+cNumDisturbances = 2
 cKernelSigma = 100
-cMeanNumPatchesPoisson = 5
+cMeanNumPatchesPoisson = 50
 vCovarianceParams = [cCovarianceIndicator,cNumDisturbances,cKernelSigma,cMeanNumPatchesPoisson]
 
 
 
 # Thresholding of population size < this number set population to zero
 cPoplationThresholdIndicator = 1
-cPopulationZeroThreshold = 500
+cPopulationZeroThreshold = 0
 
+# Generate area and distances
 aArea = classes.area(cNumPatches,cSize,cInitialPopulation,aBreedGamma,bBreedGamma,aFeedGamma,bFeedGamma,vCovarianceParams)
-classes.evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cInitialTime,cTimeHegIn,cPoplationThresholdIndicator,cPopulationZeroThreshold)
-# print(random.gammavariate(10,10))
+functions.getDistances(aArea)
 
+# Evolve system
+functions.evolveSystem(aArea,cTimeTotal,cNumSteps,cMigrantProportion,cRateParameter,cInitialTime,cTimeHegIn,cPoplationThresholdIndicator,cPopulationZeroThreshold)
 
 
